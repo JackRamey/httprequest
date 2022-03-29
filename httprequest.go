@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"mime"
 	"net/http"
 )
 
@@ -60,11 +61,16 @@ func (b *RequestBuilder) Build(ctx context.Context) (*http.Request, error) {
 	var body []byte
 	var err error
 
+	b.contentType, _, err = mime.ParseMediaType(b.contentType)
+	if err != nil {
+		return nil, fmt.Errorf("unable to parse media type: %v", err)
+	}
+
 	switch b.contentType {
 	case MIMEApplicationJson:
 		body, err = json.Marshal(body)
 		if err != nil {
-			return nil, errors.New("unable to marshal body to json")
+			return nil, fmt.Errorf("unable to marshal body to json: %v", err)
 		}
 	default:
 		return nil, fmt.Errorf("unsupported content type: %s", b.contentType)
