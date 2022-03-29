@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
+	"encoding/xml"
 	"fmt"
 	"io/ioutil"
 	"mime"
@@ -13,6 +13,11 @@ import (
 
 const (
 	MIMEApplicationJson = "application/json"
+	MIMEApplicationXml  = "application/xml"
+	MIMETextXml         = "text/xml"
+
+	HeaderAuthorization = "Authorization"
+	HeaderContentType   = "Content-Type"
 )
 
 func New(httpMethod, url string, body interface{}) *RequestBuilder {
@@ -48,7 +53,12 @@ func (b *RequestBuilder) Do(ctx context.Context, client Doer, resp interface{}) 
 	case MIMEApplicationJson:
 		err = json.Unmarshal(respBytes, &resp)
 		if err != nil {
-			return errors.New("unable to unmarshal body to json")
+			return fmt.Errorf("unable to unmarshal json body: %v", err)
+		}
+	case MIMEApplicationXml, MIMETextXml:
+		err = xml.Unmarshal(respBytes, &resp)
+		if err != nil {
+			return fmt.Errorf("unable to unmarshal xml body: %v", err)
 		}
 	default:
 		return fmt.Errorf("unsupported content type: %s", b.contentType)
@@ -61,22 +71,19 @@ func (b *RequestBuilder) Build(ctx context.Context) (*http.Request, error) {
 	var body []byte
 	var err error
 
-	b.contentType, _, err = mime.ParseMediaType(b.contentType)
+	body, err = b.resolveContentType()
 	if err != nil {
-		return nil, fmt.Errorf("unable to parse media type: %v", err)
+		return nil, err
 	}
 
-	switch b.contentType {
-	case MIMEApplicationJson:
-		body, err = json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("unable to marshal body to json: %v", err)
-		}
-	default:
-		return nil, fmt.Errorf("unsupported content type: %s", b.contentType)
+	req, err := http.NewRequestWithContext(ctx, b.httpMethod, b.url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("unable to create request")
 	}
 
-	return http.NewRequestWithContext(ctx, b.httpMethod, b.url, bytes.NewReader(body))
+	req.Header = b.header
+
+	return req, nil
 }
 
 func (b *RequestBuilder) ContentType(contentType string) *RequestBuilder {
@@ -85,13 +92,49 @@ func (b *RequestBuilder) ContentType(contentType string) *RequestBuilder {
 }
 
 func (b *RequestBuilder) AddHeader(key, value string) *RequestBuilder {
+	if b.header == nil {
+		b.header = http.Header{}
+	}
+
 	b.header.Add(key, value)
 	return b
 }
 
 func (b *RequestBuilder) SetHeader(key, value string) *RequestBuilder {
+	if b.header == nil {
+		b.header = http.Header{}
+	}
+
 	b.header.Set(key, value)
 	return b
+}
+
+func (b *RequestBuilder) resolveContentType() (body []byte, err error) {
+	b.SetHeader(HeaderContentType, b.contentType)
+
+	// Parse the content type using mime parsing and save the mediatype as the content type
+	// parameters are currently unsupported and are discarded
+	b.contentType, _, err = mime.ParseMediaType(b.contentType)
+	if err != nil {
+		return nil, fmt.Errorf("unable to parse media type: %v", err)
+	}
+
+	switch b.contentType {
+	case MIMEApplicationJson:
+		body, err = json.Marshal(b.body)
+		if err != nil {
+			return nil, fmt.Errorf("unable to marshal body to json: %v", err)
+		}
+	case MIMEApplicationXml, MIMETextXml:
+		body, err = xml.Marshal(b.body)
+		if err != nil {
+			return nil, fmt.Errorf("unable to marshal body to xml: %v", err)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported content type: %s", b.contentType)
+	}
+
+	return body, nil
 }
 
 type Doer interface {
