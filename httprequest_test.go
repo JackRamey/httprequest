@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"testing"
@@ -81,4 +82,46 @@ func TestRequestBuilder_Build(t *testing.T) {
 			Build(context.Background())
 		require.Error(t, err)
 	})
+}
+
+func TestRequestBuilder_validateStatusCode(t *testing.T) {
+	tests := []struct {
+		name                string
+		expectedStatusCodes []int
+		resp                *http.Response
+		wantErr             assert.ErrorAssertionFunc
+	}{
+		{
+			name:                "Response status code is in expected values returns no error",
+			expectedStatusCodes: []int{http.StatusCreated, http.StatusAccepted},
+			resp: &http.Response{
+				StatusCode: http.StatusAccepted,
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name:                "Response status code is http.StatusOK and expected values is nil",
+			expectedStatusCodes: nil,
+			resp: &http.Response{
+				StatusCode: http.StatusOK,
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name:                "Response status code is not in expected values returns an error",
+			expectedStatusCodes: []int{http.StatusCreated, http.StatusAccepted},
+			resp: &http.Response{
+				StatusCode: http.StatusNotFound,
+			},
+			wantErr: assert.Error,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := &RequestBuilder{
+				expectedStatusCodes: tt.expectedStatusCodes,
+			}
+			tt.wantErr(t, b.validateStatusCode(tt.resp), fmt.Sprintf("validateStatusCode(%v)", tt.resp))
+		})
+	}
 }

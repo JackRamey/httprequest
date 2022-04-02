@@ -22,46 +22,42 @@ const (
 
 func New(httpMethod, url string, body interface{}) *RequestBuilder {
 	return &RequestBuilder{
-		body:        body,
-		url:         url,
-		httpMethod:  httpMethod,
-		contentType: MIMEApplicationJson,
+		body:                body,
+		url:                 url,
+		httpMethod:          httpMethod,
+		expectedStatusCodes: []int{http.StatusOK},
+		contentType:         MIMEApplicationJson,
 	}
 }
 
 type RequestBuilder struct {
-	body        interface{}
-	url         string
-	httpMethod  string
-	contentType string
-	header      http.Header
+	body                interface{}
+	url                 string
+	httpMethod          string
+	contentType         string
+	expectedStatusCodes []int
+	header              http.Header
 }
 
-func (b *RequestBuilder) Do(ctx context.Context, client Doer, resp interface{}) error {
+func (b *RequestBuilder) Do(ctx context.Context, doer Doer, out interface{}) error {
 	req, err := b.Build(ctx)
 	if err != nil {
 		return err
 	}
 
-	_resp, err := client.Do(req)
+	resp, err := doer.Do(req)
 	if err != nil {
 		return err
 	}
 
-	respBytes, err := ioutil.ReadAll(_resp.Body)
-	switch b.contentType {
-	case MIMEApplicationJson:
-		err = json.Unmarshal(respBytes, &resp)
-		if err != nil {
-			return fmt.Errorf("unable to unmarshal json body: %v", err)
-		}
-	case MIMEApplicationXml, MIMETextXml:
-		err = xml.Unmarshal(respBytes, &resp)
-		if err != nil {
-			return fmt.Errorf("unable to unmarshal xml body: %v", err)
-		}
-	default:
-		return fmt.Errorf("unsupported content type: %s", b.contentType)
+	err = b.validateStatusCode(resp)
+	if err != nil {
+		return err
+	}
+
+	err = b.unmarshalResponse(resp, out)
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -88,6 +84,16 @@ func (b *RequestBuilder) Build(ctx context.Context) (*http.Request, error) {
 
 func (b *RequestBuilder) ContentType(contentType string) *RequestBuilder {
 	b.contentType = contentType
+	return b
+}
+
+func (b *RequestBuilder) StatusIs(status int) *RequestBuilder {
+	b.expectedStatusCodes = []int{status}
+	return b
+}
+
+func (b *RequestBuilder) StatusIn(statuses []int) *RequestBuilder {
+	b.expectedStatusCodes = statuses
 	return b
 }
 
@@ -135,6 +141,45 @@ func (b *RequestBuilder) resolveContentType() (body []byte, err error) {
 	}
 
 	return body, nil
+}
+
+func (b *RequestBuilder) unmarshalResponse(resp *http.Response, out interface{}) error {
+	respBytes, err := ioutil.ReadAll(resp.Body)
+	switch b.contentType {
+	case MIMEApplicationJson:
+		err = json.Unmarshal(respBytes, &out)
+		if err != nil {
+			return fmt.Errorf("unable to unmarshal json body: %v", err)
+		}
+	case MIMEApplicationXml, MIMETextXml:
+		err = xml.Unmarshal(respBytes, &out)
+		if err != nil {
+			return fmt.Errorf("unable to unmarshal xml body: %v", err)
+		}
+	default:
+		return fmt.Errorf("unsupported content type: %s", b.contentType)
+	}
+
+	return nil
+}
+
+func (b *RequestBuilder) validateStatusCode(resp *http.Response) error {
+	if len(b.expectedStatusCodes) == 0 {
+		b.expectedStatusCodes = []int{http.StatusOK}
+	}
+
+	var isExpectedStatus bool
+	for _, code := range b.expectedStatusCodes {
+		if isExpectedStatus = resp.StatusCode == code; isExpectedStatus {
+			break
+		}
+	}
+
+	if !isExpectedStatus {
+		return fmt.Errorf("received unexpected status code: %v", resp.StatusCode)
+	}
+
+	return nil
 }
 
 type Doer interface {
