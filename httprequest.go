@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"mime"
 	"net/http"
@@ -39,32 +40,32 @@ type RequestBuilder struct {
 	header              http.Header
 }
 
-func (b *RequestBuilder) Do(ctx context.Context, doer Doer, out interface{}) error {
+func (b *RequestBuilder) Do(ctx context.Context, doer Doer, out interface{}) (*http.Response, error) {
 	req, err := b.Build(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	resp, err := doer.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	err = b.validateStatusCode(resp)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	err = b.unmarshalResponse(resp, out)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return resp, nil
 }
 
 func (b *RequestBuilder) Build(ctx context.Context) (*http.Request, error) {
-	var body []byte
+	var body io.Reader
 	var err error
 
 	body, err = b.resolveContentType()
@@ -72,7 +73,7 @@ func (b *RequestBuilder) Build(ctx context.Context) (*http.Request, error) {
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, b.httpMethod, b.url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, b.httpMethod, b.url, body)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create request")
 	}
@@ -115,7 +116,11 @@ func (b *RequestBuilder) SetHeader(key, value string) *RequestBuilder {
 	return b
 }
 
-func (b *RequestBuilder) resolveContentType() (body []byte, err error) {
+func (b *RequestBuilder) resolveContentType() (body io.Reader, err error) {
+	if b.body == nil {
+		return http.NoBody, nil
+	}
+
 	b.SetHeader(HeaderContentType, b.contentType)
 
 	// Parse the content type using mime parsing and save the mediatype as the content type
@@ -125,17 +130,20 @@ func (b *RequestBuilder) resolveContentType() (body []byte, err error) {
 		return nil, fmt.Errorf("unable to parse media type: %v", err)
 	}
 
+	var bodyBytes []byte
 	switch b.contentType {
 	case MIMEApplicationJson:
-		body, err = json.Marshal(b.body)
+		bodyBytes, err = json.Marshal(b.body)
 		if err != nil {
 			return nil, fmt.Errorf("unable to marshal body to json: %v", err)
 		}
+		body = bytes.NewReader(bodyBytes)
 	case MIMEApplicationXml, MIMETextXml:
-		body, err = xml.Marshal(b.body)
+		bodyBytes, err = xml.Marshal(b.body)
 		if err != nil {
 			return nil, fmt.Errorf("unable to marshal body to xml: %v", err)
 		}
+		body = bytes.NewReader(bodyBytes)
 	default:
 		return nil, fmt.Errorf("unsupported content type: %s", b.contentType)
 	}
